@@ -1,0 +1,32 @@
+# --- 系统与编辑器缓存 ---
+__pycache__/
+*.py[oc]
+.obsidian/
+.python-version
+.streamlit/
+uv.lock
+
+# --- 虚拟环境 ---
+.venv/
+venv/
+env/
+
+# --- 核心隐私与配置 (严禁上传) ---
+config.json
+browser_data/
+
+# --- 任务产物与临时文件 ---
+exports/
+error_screenshot_*.png
+测试音频.wav
+
+# --- 构建与分发 ---
+build/
+dist/
+*.egg-info/
+
+# --- 旧版/冗余脚本 (如果你确定不再需要同步它们) ---
+fastwhisper.bat
+fmp42txt.py
+fmp42txt-novad.py
+catch.py

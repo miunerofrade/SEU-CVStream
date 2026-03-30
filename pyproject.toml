@@ -1,0 +1,19 @@
+[project]
+name = "catch"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "cryptography>=46.0.6",
+    "dashscope>=1.25.15",
+    "img2pdf>=0.6.3",
+    "numpy>=2.4.3",
+    "openai>=2.30.0",
+    "opencv-python>=4.13.0.92",
+    "playwright-stealth>=2.0.2",
+    "psutil>=7.2.2",
+    "streamlit>=1.55.0",
+    "streamlit-autorefresh>=1.0.1",
+    "streamlit-option-menu>=0.4.0",
+]
