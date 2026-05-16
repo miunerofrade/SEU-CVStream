@@ -6,7 +6,6 @@ import glob
 
 def check_and_install_imdisk():
     """前置检查系统驱动，支持 exe 安装包和解压后的 bat 安装脚本"""
-    # 1. 检查环境变量中是否有 imdisk 命令
     if shutil.which("imdisk"):
         return True, "驱动已就绪"
     
@@ -16,12 +15,10 @@ def check_and_install_imdisk():
         
     installer_path = None
     
-    # 2. 优先找 exe 安装包
     exe_installers = glob.glob(os.path.join(res_dir, "ImDiskTk*.exe"))
     if exe_installers:
         installer_path = exe_installers[0]
     else:
-        # 3. 如果没 exe，深度搜索 res 目录下的 install.bat (兼容最新 64 位压缩包)
         for root, dirs, files in os.walk(res_dir):
             if "install.bat" in files:
                 installer_path = os.path.join(root, "install.bat")
@@ -31,9 +28,7 @@ def check_and_install_imdisk():
         download_url = "https://sourceforge.net/projects/imdisk-toolkit/"
         return False, f"系统未安装驱动，且 res 目录下未找到安装文件。\n请前往 {download_url} 下载压缩包，解压后放入 res 文件夹重试。"
         
-    # 4. 找到安装程序，触发 UAC 唤起安装
     if installer_path.endswith(".bat"):
-        # 运行 bat 需要通过 cmd.exe 提权，且需指定工作目录防止路径找不到
         work_dir = os.path.dirname(installer_path)
         ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", f'/c "{installer_path}"', work_dir, 1)
     else:

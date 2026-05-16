@@ -11,7 +11,7 @@ uv.lock
 venv/
 env/
 
-# --- 核心隐私与配置 (严禁上传) ---
+# --- 核心隐私与配置 ---
 config.json
 browser_data/
 
@@ -25,8 +25,9 @@ build/
 dist/
 *.egg-info/
 
-# --- 旧版/冗余脚本 (如果你确定不再需要同步它们) ---
+# --- 旧版/冗余脚本  ---
 fastwhisper.bat
 fmp42txt.py
 fmp42txt-novad.py
 catch.py
+PROBLEMS.md

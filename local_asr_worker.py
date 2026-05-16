@@ -1,4 +1,4 @@
-# --- local_asr_worker.py ---
+#local_asr_worker.py
 import os
 import subprocess
 import warnings

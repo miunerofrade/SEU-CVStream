@@ -201,9 +201,6 @@ def run_manual_init_login(target_url, username, password):
         with sync_playwright() as p:
             yield f"[{get_time()}] 正在唤起可视化授权环境..."
             
-            import os
-            user_data_dir = os.path.join(os.getcwd(), "browser_data")
-            
              
              
             browser_args = [
@@ -212,14 +209,21 @@ def run_manual_init_login(target_url, username, password):
                 "--start-maximized"
             ]
             
-            context = p.chromium.launch_persistent_context(
-                user_data_dir=user_data_dir,
+            browser = p.chromium.launch(
                 headless=False,
-                no_viewport=True,  
                 args=browser_args
             )
             
-            page = context.pages[0] if context.pages else context.new_page()
+            context = browser.new_context(
+                no_viewport=True,  
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                locale='zh-CN',
+                timezone_id='Asia/Shanghai',
+                permissions=['geolocation']
+            )
+            
+            page = context.new_page()
+            page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             
             try:
                  
@@ -231,6 +235,7 @@ def run_manual_init_login(target_url, username, password):
             finally:
                 time.sleep(2)
                 context.close()
+                browser.close()
     except Exception as e:
         yield f"[{get_time()}] 引擎启动失败: {str(e)}"
 
@@ -241,12 +246,7 @@ def run_fetch_dates_pipeline(target_url, username, password, headless):
     
     try:
         with sync_playwright() as p:
-            yield f"[{get_time()}] 启动探测浏览器内核 (持久化模式)..."
-            
-            import os
-             
-            user_data_dir = os.path.join(os.getcwd(), "browser_data")
-            
+            yield f"[{get_time()}] 启动探测浏览器内核 (普通模式)..."
              
             browser_args = ["--disable-blink-features=AutomationControlled"]
             
@@ -260,14 +260,22 @@ def run_fetch_dates_pipeline(target_url, username, password, headless):
             else:
                 actual_headless = False
                 
-            context = p.chromium.launch_persistent_context(
-                user_data_dir=user_data_dir,
+            browser = p.chromium.launch(
                 headless=actual_headless, 
                 args=browser_args
             )
             
+            context = browser.new_context(
+                viewport={'width': 1920, 'height': 1080},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                locale='zh-CN',
+                timezone_id='Asia/Shanghai',
+                permissions=['geolocation']
+            )
+            
              
-            page = context.pages[0] if context.pages else context.new_page()
+            page = context.new_page()
+            page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             try:
                 yield from execute_login(page, target_url, username, password)
                 yield f"[{get_time()}] 登录成功，正在解析课程列表结构..."
@@ -277,6 +285,7 @@ def run_fetch_dates_pipeline(target_url, username, password, headless):
                 yield f"[{get_time()}] 探测中断: {str(e)}"
             finally:
                 context.close()
+                browser.close()
     except Exception as e:
         yield f"[{get_time()}] 内核启动失败: {str(e)}"
 
@@ -288,11 +297,7 @@ def run_pipeline(target_url, username, password, headless, asr_worker, stop_even
     try:
          
        with sync_playwright() as p:
-            yield f"[{get_time()}] 启动探测浏览器内核 (持久化模式)..."
-            
-            import os
-             
-            user_data_dir = os.path.join(os.getcwd(), "browser_data")
+            yield f"[{get_time()}] 启动探测浏览器内核 (普通模式)..."
             
              
             browser_args = ["--disable-blink-features=AutomationControlled"]
@@ -311,14 +316,22 @@ def run_pipeline(target_url, username, password, headless, asr_worker, stop_even
                     "--window-size=1920,1080"           
                 ])
                 
-            context = p.chromium.launch_persistent_context(
-                user_data_dir=user_data_dir,
+            browser = p.chromium.launch(
                 headless=actual_headless, 
                 args=browser_args
             )
             
+            context = browser.new_context(
+                viewport={'width': 1920, 'height': 1080},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                locale='zh-CN',
+                timezone_id='Asia/Shanghai',
+                permissions=['geolocation']
+            )
+            
              
-            page = context.pages[0] if context.pages else context.new_page()
+            page = context.new_page()
+            page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             try:
                  
                 yield from execute_login(page, target_url, username, password)
@@ -341,12 +354,13 @@ def run_pipeline(target_url, username, password, headless, asr_worker, stop_even
                     target_date=st.session_state.selected_target_date
                 )
                 
+                yield f"[{get_time()}] 任务全部完成，正在准备退出..."
             except Exception as e:
                 yield f"[{get_time()}] 流程中断: {str(e)}"
             finally:
-                yield f"[{get_time()}] 任务结束，清理浏览器..."
                 time.sleep(2)
                 context.close()
+                browser.close()
                 
     except Exception as e:
         yield f"[{get_time()}] 浏览器引擎启动失败: {str(e)}"
@@ -395,19 +409,16 @@ def main():
      
     st.markdown("""
     <style>
-    /* 全局字体与纯净背景 */
     html, body, [class*="css"] {
         font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
         background-color: #FFFFFF !important;
     }
     
-    /* 侧边栏：取消右侧死板的分割线，让界面融为一体 */
     [data-testid="stSidebar"] {
         background-color: #FAFAFA !important;
         border-right: none !important; 
     }
     
-    /* 按钮：去掉所有沉重的背景，回归线条与文字 */
     .stButton > button {
         border: 1px solid #E5E5E5 !important;
         background-color: transparent !important;
@@ -422,7 +433,6 @@ def main():
         background-color: #F9F9F9 !important;
     }
     
-    /* 核心主按钮（如运行）：纯黑底白字，极致聚焦 */
     div[data-testid="stButton"] button[kind="primary"] {
         background-color: #111111 !important;
         color: white !important;
@@ -431,8 +441,6 @@ def main():
     div[data-testid="stButton"] button[kind="primary"]:hover {
         background-color: #000000 !important;
     }
-    
-    /* 输入框：底部单线设计，呼吸感拉满 */
     .stTextInput input, .stSelectbox div[data-baseweb="select"] {
         border: none !important;
         border-bottom: 1px solid #EAEAEA !important;
@@ -444,7 +452,6 @@ def main():
         border-bottom: 1px solid #111111 !important;
     }
     
-    /* 取消各种原生卡片的边框 */
     div[data-testid="stVerticalBlock"] > div[style*="border: 1px solid"] {
         border: none !important;
         background-color: #FCFCFC !important;

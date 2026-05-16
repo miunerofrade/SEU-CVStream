@@ -53,7 +53,6 @@ def fetch_dates_only(page):
     except Exception as e:
         return []
 
-# ================= 核心流捕获引擎 =================
 
 def find_mp4_url(data):
     """递归遍历 JSON，寻找包含 auth_key 的 .mp4 URL"""
@@ -79,11 +78,9 @@ class RouteIsolationCapture:
     def route_handler(self, route):
         url = route.request.url
         if ".mp4" in url or ".m3u8" in url:
-            # 只看不动，拿到含 auth_key 的链接就存下来
             if not self.captured_url and "auth_key" in url:
                 self.captured_url = url
             
-        # 永远放行，绝不掐断校园网的加载，保证网页健康状态
         route.continue_()
 
     def activate(self):
@@ -96,7 +93,6 @@ class RouteIsolationCapture:
         except:
             pass
 
-# ================= 任务主执行器 =================
 
 def execute_video_task(page, target_url, asr_worker, export_base_dir, stop_event, target_date=None, need_subtitle=True, need_ppt=False, keep_media=False):
     def get_time(): return time.strftime('%H:%M:%S')
@@ -198,18 +194,15 @@ def execute_video_task(page, target_url, asr_worker, export_base_dir, stop_event
         yield f"   - 媒体归档: {media_dir}"
     yield f"[{get_time()}] ----------------------------------------"
     
-    # ================== 阶段 1：原子化提取 ==================
     yield f"[{get_time()}] [阶段 1/2] 启动原子化网络侦听，精准抽取目标课时流..."
     
-    # 【已删除】导致激活死区的预点击代码
 
-    # 挂载 P3 兜底隔离器（纯嗅探）
     route_capturer = RouteIsolationCapture(page)
     route_capturer.activate()
 
     for item in target_items:
         if stop_event.is_set():
-            yield f"[{get_time()}] 🛑 接收到打断指令，停止执行后续任务..."
+            yield f"[{get_time()}] 接收到打断指令，停止执行后续任务..."
             asr_worker.abort()
             route_capturer.deactivate()
             return  
@@ -225,13 +218,9 @@ def execute_video_task(page, target_url, asr_worker, export_base_dir, stop_event
             page.wait_for_timeout(500)  
             
             final_url = None
-            route_capturer.captured_url = None # 重置 P3 缓存
+            route_capturer.captured_url = None 
 
-            # --------------------------------------------------
-            # P0 策略: JS 强点击 + 页面重载双重保障
-            # --------------------------------------------------
             try:
-                # 尝试一：通过原生 JS 强制点击（规避 UI 遮挡引起无效点击）
                 with page.expect_response(lambda r: "course_vod_urls_new" in r.url and r.ok, timeout=6000) as resp_info:
                     click_target.evaluate("node => node.click()")
                     
@@ -241,7 +230,6 @@ def execute_video_task(page, target_url, asr_worker, export_base_dir, stop_event
                 if final_url:
                     yield f"[{get_time()}] [DEBUG] 第 {seq} 节 P0(点击) 捕获成功。"
             except Exception as e:
-                # 尝试二：如果点击未触发 XHR（说明该课时已处于当前激活死区），强制刷新页面
                 yield f"[{get_time()}] [DEBUG] 课时处于激活死区 (或请求超时)，强制重载页面状态..."
                 try:
                     with page.expect_response(lambda r: "course_vod_urls_new" in r.url and r.ok, timeout=10000) as resp_info:
@@ -254,19 +242,27 @@ def execute_video_task(page, target_url, asr_worker, export_base_dir, stop_event
                 except Exception as reload_e:
                     yield f"[{get_time()}] [DEBUG] P0 彻底失效: {reload_e}"
 
-            # --------------------------------------------------
-            # P3 策略: 物理嗅探（如果 API 获取均告失败，等待播放器拉流）
-            # --------------------------------------------------
+
             if not final_url:
                 yield f"[{get_time()}] [DEBUG] 启动 P3 物理嗅探兜底..."
                 click_target.evaluate("node => node.click()") 
-                page.wait_for_timeout(3000) # 等待真实的 mp4 流被播放器请求
+                page.wait_for_timeout(3000) 
                 
                 if route_capturer.captured_url:
                     final_url = route_capturer.captured_url
                     yield f"[{get_time()}] [DEBUG] 第 {seq} 节 P3(嗅探) 捕获成功。"
 
             item['final_url'] = final_url
+
+            if final_url and need_subtitle:
+                yield f"[{get_time()}] [DEBUG] 等待字幕请求加载 (尝试规避约 5s 防盗页)..."
+                wait_time = 0
+                while wait_time < 8000:
+                    if seq in captured_subtitles:
+                        yield f"[{get_time()}] [DEBUG] 官方字幕拦截成功！"
+                        break
+                    page.wait_for_timeout(500)
+                    wait_time += 500
             
             if not final_url:
                 yield f"[{get_time()}] ❌ 第 {seq} 节获取流失败，未找到有效链接。"
@@ -274,13 +270,12 @@ def execute_video_task(page, target_url, asr_worker, export_base_dir, stop_event
         except Exception as e:
             yield f"[{get_time()}] 第 {seq} 节节点触发异常: {e}"
 
-    # 提取结束，卸载隔离器
+
     route_capturer.deactivate()
     yield f"[{get_time()}] ----------------------------------------"
 
-    # ================== 阶段 2：本地 I/O ==================
     if stop_event.is_set():
-        yield f"[{get_time()}] 🛑 提取完成但收到打断指令，取消后续处理。"
+        yield f"[{get_time()}] 提取完成但收到打断指令，取消后续处理。"
         return
      
     yield f"[{get_time()}] [阶段 2/2] 进入单线程持久化队列，执行本地 I/O 处理..."
@@ -305,13 +300,13 @@ def execute_video_task(page, target_url, asr_worker, export_base_dir, stop_event
         got_official_sub = False
         
         if need_subtitle and sub_json:
-            yield f"[{get_time()}] 🎯 挂载官方字幕数据，执行写入..."
+            yield f"[{get_time()}] 挂载官方字幕数据，执行写入..."
             try:
                 process_official_json(sub_json, sub_dir, task_name)
                 got_official_sub = True 
-                yield f"[{get_time()}] ✅ 官方字幕写入成功。"
+                yield f"[{get_time()}] 官方字幕写入成功。"
             except Exception as e:
-                yield f"[{get_time()}] ❌ 官方字幕写入失败: {e}"
+                yield f"[{get_time()}] 官方字幕写入失败: {e}"
 
         final_url = item.get('final_url')
         need_media = need_ppt or keep_media or (need_subtitle and not got_official_sub)
@@ -320,7 +315,7 @@ def execute_video_task(page, target_url, asr_worker, export_base_dir, stop_event
         if need_media:
             if final_url:
                 msg = "轻量级提取 (仅音频)" if audio_only_mode else "全量抓取 (音视频)"
-                yield f"[{get_time()}] 🚀 启动媒体处理引擎 {msg}..."
+                yield f"[{get_time()}] 启动媒体处理引擎 {msg}..."
                 
                 try:
                     asr_worker.export_base_dir = sub_dir 
@@ -342,7 +337,7 @@ def execute_video_task(page, target_url, asr_worker, export_base_dir, stop_event
                     
                     if need_ppt:
                         media_dir.mkdir(parents=True, exist_ok=True)
-                        yield f"[{get_time()}] 🖼️ 初始化 PPT 视觉抽帧队列..."
+                        yield f"[{get_time()}] 初始化 PPT 视觉抽帧队列..."
                         try:
                             source_video_path = dest_media_path if dest_media_path.exists() else asr_worker.temp_video_path
                             ppt_worker = PPTExtractor(
@@ -354,15 +349,15 @@ def execute_video_task(page, target_url, asr_worker, export_base_dir, stop_event
                             )
                             yield from ppt_worker.extract_and_build_pdf(ignore_bottom_right_ratio=0.25)
                         except Exception as e:
-                            yield f"[{get_time()}] ❌ PPT 提取级联崩溃: {e}"
+                            yield f"[{get_time()}] PPT 提取级联崩溃: {e}"
                     
                     asr_worker._cleanup() 
 
                 except Exception as e:
-                    yield f"[{get_time()}] ❌ 媒体处理异常终止: {e}"
+                    yield f"[{get_time()}] 媒体处理异常终止: {e}"
 
                 if stop_event.is_set():
-                    yield f"[{get_time()}] 🛑 任务打断，清理当前残骸..."
+                    yield f"[{get_time()}] 任务打断，清理当前残骸..."
                     asr_worker.abort()
                     for f in expected_files:
                         if f.exists():
@@ -370,7 +365,7 @@ def execute_video_task(page, target_url, asr_worker, export_base_dir, stop_event
                             except: pass
                     return
             else:
-                yield f"[{get_time()}] ❌ 未检测到有效流，跳过媒体任务。"
+                yield f"[{get_time()}] 未检测到有效流，跳过媒体任务。"
 
         yield f"[{get_time()}] ----------------------------------------"
 
