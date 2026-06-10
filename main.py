@@ -681,19 +681,29 @@ def main():
         date_col1, date_col2 = st.columns([0.5, 0.5], vertical_alignment="bottom")
         
         with date_col1:
-            date_options = ["自动获取最新"] + st.session_state.fetched_dates
+            # 「全部日期」仅在仅开启字幕抓取时可用
+            subtitle_only = need_subtitle and not need_ppt and not keep_media
+            date_options = ["自动获取最新"]
+            if subtitle_only:
+                date_options.append("全部日期")
+            date_options += st.session_state.fetched_dates
             
-             
-            current_index = 0
-            if st.session_state.selected_target_date in date_options:
-                current_index = date_options.index(st.session_state.selected_target_date)
+            # 安全获取选中索引，兜底到 0
+            safe_target = st.session_state.get("selected_target_date", "自动获取最新")
+            if not subtitle_only and safe_target == "全部日期":
+                safe_target = "自动获取最新"
+                st.session_state.selected_target_date = safe_target
+            try:
+                current_index = date_options.index(safe_target)
+            except ValueError:
+                current_index = 0
                 
             selected_date = st.selectbox(
                 "指定抓取批次 (日期)", 
                 options=date_options, 
                 index=current_index,
                 key="date_selector",
-                help="默认抓取最新一节。若需抓取历史课程，请先点击右侧刷新按钮。"
+                help="「全部日期」仅字幕抓取模式下有效，将遍历所有课程日获取字幕。"
             )
             st.session_state.selected_target_date = selected_date
             
@@ -712,7 +722,7 @@ def main():
             if c1.button("保存到收藏夹", use_container_width=True):
                 if new_alias and target_url:
                     history_dict[new_alias] = target_url
-                    save_config({"history_urls": history_dict})
+                    save_config({"history_urls": history_dict, "last_selected_label": new_alias})
                     st.success(f"已保存: {new_alias}")
                     st.rerun()
             if c2.button("删除当前选择", use_container_width=True):

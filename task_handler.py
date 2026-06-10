@@ -112,6 +112,14 @@ def execute_video_task(page, target_url, asr_worker, export_base_dir, stop_event
     page.on("response", handle_subtitles)
     yield f"[{get_time()}] 正在扫描课程播放列表全局数据..."
     
+    # 预定义变量，确保在 try/except 外部也可见
+    is_all_dates = False
+    target_items = []
+    date_formatted = ""
+    course_name = "未知课程"
+    teacher_name = "未知教师"
+    existing_keys = set()  # 已有字幕的 (date, period_seq) 集合
+    
     try:
         page.locator(".tecl-info").wait_for(state="visible", timeout=15000)
         raw_course_name = page.locator(".tecl-info .top").inner_text()
@@ -161,9 +169,13 @@ def execute_video_task(page, target_url, asr_worker, export_base_dir, stop_event
 
         all_dates = sorted(list(set([item['date'] for item in playlist])))
 
+        is_all_dates = (target_date == "全部日期")
+        
         if not target_date or target_date == "自动获取最新":
             target_date = all_dates[-1] 
             yield f"[{get_time()}] 未指定特定日期，系统自动锁定最新课程日: {target_date}"
+        elif is_all_dates:
+            yield f"[{get_time()}] 选择全部日期模式，准备遍历所有 {len(all_dates)} 个课程日..."
         else:
             yield f"[{get_time()}] 校验用户指定抓取日期: {target_date}"
             if target_date not in all_dates:
@@ -171,27 +183,61 @@ def execute_video_task(page, target_url, asr_worker, export_base_dir, stop_event
                 yield f"[{get_time()}] 🛑 拦截生效，已取消后续所有抓取动作以避免资源浪费。"
                 return  
 
-        target_items = [item for item in playlist if item['date'] == target_date]
-        target_items.sort(key=lambda x: (x['time'], x['period_seq']))
-        
-        date_formatted = target_date.replace('-', '') 
+        if is_all_dates:
+            target_items = sorted(playlist, key=lambda x: (x['date'], x['time'], x['period_seq']))
+        else:
+            target_items = [item for item in playlist if item['date'] == target_date]
+            target_items.sort(key=lambda x: (x['time'], x['period_seq']))
+            date_formatted = target_date.replace('-', '')
+
+        # 预扫描已有字幕文件，避免重复工作
+        base_path = Path(export_base_dir)
+        course_sub_dir = base_path / "subtitle" / course_name
+        if course_sub_dir.exists():
+            for date_dir in course_sub_dir.iterdir():
+                if date_dir.is_dir():
+                    for f in date_dir.glob("*_transcript.txt"):
+                        try:
+                            fname = f.stem.replace("_transcript", "")
+                            parts = fname.split("-", 1)
+                            if len(parts) == 2:
+                                d_key = parts[0]
+                                seq_key = int(parts[1])
+                                existing_keys.add((d_key, seq_key))
+                        except:
+                            pass
+            if existing_keys:
+                yield f"[{get_time()}] 扫描到 {len(existing_keys)} 个已有字幕文件，将跳过对应课时。"
+        else:
+            course_sub_dir.mkdir(parents=True, exist_ok=True) 
         yield f"[{get_time()}] 课程 [{course_name}] | 主讲老师: {teacher_name}"
-        yield f"[{get_time()}] {target_date} 共有 {len(target_items)} 节课，准备顺序执行..."
+        if is_all_dates:
+            yield f"[{get_time()}] 全部日期模式，共 {len(target_items)} 节课，准备顺序执行..."
+        else:
+            yield f"[{get_time()}] {target_date} 共有 {len(target_items)} 节课，准备顺序执行..."
 
     except Exception as e:
         yield f"[{get_time()}] 播放列表初始化失败: {e}"
         return
 
     base_path = Path(export_base_dir)
-    sub_dir = base_path / "subtitle" / course_name / f"{date_formatted}-{teacher_name}"
-    media_dir = base_path / "media" / course_name / f"{date_formatted}-{teacher_name}"
+    if is_all_dates:
+        # 全部日期模式：不创建 ALL 目录，每个课时写入自身日期的目录
+        sub_dir = base_path / "subtitle" / course_name
+        media_dir = base_path / "media" / course_name
+        sub_dir.mkdir(parents=True, exist_ok=True)
+        yield f"[{get_time()}] 产物分类目录已确认:"
+        yield f"   - 字幕根目录: {sub_dir} (按日期自动归档)"
+    else:
+        sub_dir = base_path / "subtitle" / course_name / f"{date_formatted}-{teacher_name}"
+        media_dir = base_path / "media" / course_name / f"{date_formatted}-{teacher_name}"
 
-    sub_dir.mkdir(parents=True, exist_ok=True)
-    yield f"[{get_time()}] 产物分类目录已确认:"
-    yield f"   - 字幕归档: {sub_dir}"
-    if need_ppt or keep_media:
-        media_dir.mkdir(parents=True, exist_ok=True)
-        yield f"   - 媒体归档: {media_dir}"
+        sub_dir.mkdir(parents=True, exist_ok=True)
+        yield f"[{get_time()}] 产物分类目录已确认:"
+        yield f"   - 字幕归档: {sub_dir}"
+        if need_ppt or keep_media:
+            media_dir.mkdir(parents=True, exist_ok=True)
+            yield f"   - 媒体归档: {media_dir}"
     yield f"[{get_time()}] ----------------------------------------"
     
     yield f"[{get_time()}] [阶段 1/2] 启动原子化网络侦听，精准抽取目标课时流..."
@@ -208,11 +254,19 @@ def execute_video_task(page, target_url, asr_worker, export_base_dir, stop_event
             return  
         
         seq = item['period_seq']
-        active_lesson_seq[0] = seq
+        idx = item['index']
+        date_key = item['date'].replace('-', '')
+        
+        # 全部日期模式：预扫描跳过已有字幕的课时
+        if is_all_dates and (date_key, seq) in existing_keys:
+            yield f"[{get_time()}] [跳过] 第 {seq} 节 ({item['date']}) 已有字幕文件。"
+            continue
+        
+        active_lesson_seq[0] = idx if is_all_dates else seq
         
         try:
             yield f"[{get_time()}] 正在刺激第 {seq} 节节点响应..."
-            container = page.locator(".list-item.student").nth(item['index'])
+            container = page.locator(".list-item.student").nth(idx)
             click_target = container.locator(".title").first
             click_target.scroll_into_view_if_needed()
             page.wait_for_timeout(500)  
@@ -257,8 +311,9 @@ def execute_video_task(page, target_url, asr_worker, export_base_dir, stop_event
             if final_url and need_subtitle:
                 yield f"[{get_time()}] [DEBUG] 等待字幕请求加载 (尝试规避约 5s 防盗页)..."
                 wait_time = 0
+                lookup_key = idx if is_all_dates else seq
                 while wait_time < 8000:
-                    if seq in captured_subtitles:
+                    if lookup_key in captured_subtitles:
                         yield f"[{get_time()}] [DEBUG] 官方字幕拦截成功！"
                         break
                     page.wait_for_timeout(500)
@@ -280,12 +335,20 @@ def execute_video_task(page, target_url, asr_worker, export_base_dir, stop_event
      
     yield f"[{get_time()}] [阶段 2/2] 进入单线程持久化队列，执行本地 I/O 处理..."
     for item in target_items:
-        task_name = f"{date_formatted}-{item['period_seq']}"
+        # 全部日期模式：使用 item 自身日期作为子目录，写入对应日期的目录
+        if is_all_dates:
+            item_date_key = item['date'].replace('-', '')
+            item_sub_dir = base_path / "subtitle" / course_name / f"{item_date_key}-{teacher_name}"
+            item_sub_dir.mkdir(parents=True, exist_ok=True)
+            task_name = f"{item_date_key}-{item['period_seq']}"
+        else:
+            item_sub_dir = sub_dir
+            task_name = f"{date_formatted}-{item['period_seq']}"
         
         yield f"\n[{get_time()}] 任务调度 -> 开始处理第 {item['period_seq']} 节 [{task_name}]..."
 
         expected_files = [
-            sub_dir / f"{task_name}_transcript.txt",
+            item_sub_dir / f"{task_name}_transcript.txt",
             media_dir / f"{task_name}.mp4",
             media_dir / f"{task_name}.m4a",
             media_dir / f"{task_name}_PPT.pdf"
@@ -293,20 +356,27 @@ def execute_video_task(page, target_url, asr_worker, export_base_dir, stop_event
         
         if any(f.exists() for f in expected_files):
             yield f"[{get_time()}] 检测到部分产物已存在，执行增量跳过策略。"
-            if (sub_dir / f"{task_name}_transcript.txt").exists():
+            if (item_sub_dir / f"{task_name}_transcript.txt").exists():
                 continue
 
-        sub_json = captured_subtitles.get(item['period_seq'])
+        sub_json = captured_subtitles.get(item['index'] if is_all_dates else item['period_seq'])
         got_official_sub = False
         
         if need_subtitle and sub_json:
             yield f"[{get_time()}] 挂载官方字幕数据，执行写入..."
             try:
-                process_official_json(sub_json, sub_dir, task_name)
+                process_official_json(sub_json, item_sub_dir, task_name)
                 got_official_sub = True 
                 yield f"[{get_time()}] 官方字幕写入成功。"
             except Exception as e:
                 yield f"[{get_time()}] 官方字幕写入失败: {e}"
+
+        # 全部日期模式下仅抓取官方字幕，跳过媒体/PPT 处理
+        if is_all_dates:
+            if not got_official_sub:
+                yield f"[{get_time()}] [全部日期模式] 未捕获到官方字幕，跳过。"
+            yield f"[{get_time()}] ----------------------------------------"
+            continue
 
         final_url = item.get('final_url')
         need_media = need_ppt or keep_media or (need_subtitle and not got_official_sub)
@@ -318,7 +388,7 @@ def execute_video_task(page, target_url, asr_worker, export_base_dir, stop_event
                 yield f"[{get_time()}] 启动媒体处理引擎 {msg}..."
                 
                 try:
-                    asr_worker.export_base_dir = sub_dir 
+                    asr_worker.export_base_dir = item_sub_dir 
                     asr_worker.extract_media(final_url, target_url, audio_only=audio_only_mode)
                     
                     ext = ".m4a" if audio_only_mode else ".mp4"
