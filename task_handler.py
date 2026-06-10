@@ -139,6 +139,7 @@ def execute_video_task(page, target_url, asr_worker, export_base_dir, stop_event
             const items = Array.from(document.querySelectorAll('.list-item.student'));
             let playlist = [];
             items.forEach((el, index) => {
+                if (el.classList.contains('can-not-play')) return;
                 const infoEl = el.querySelector('.bottom-left.sle');
                 const titleEl = el.querySelector('.title.sle');
                 if (!infoEl) return;
