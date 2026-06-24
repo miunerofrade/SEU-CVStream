@@ -101,13 +101,19 @@ def save_config(data):
     to_save = current.copy()
     
      
-    to_save["username"] = encrypt(to_save.get("username", ""))
-    to_save["password"] = encrypt(to_save.get("password", ""))
-    to_save["api_key"] = encrypt(to_save.get("api_key", ""))
-    to_save["asr_api_key"] = encrypt(to_save.get("asr_api_key", ""))
+    # 仅对明文进行加密，避免对已加密的密文二次加密
+    for field in ("username", "password", "api_key", "asr_api_key"):
+        val = to_save.get(field, "")
+        if val and not _is_encrypted(val):
+            to_save[field] = encrypt(val)
+
     os.makedirs(os.path.dirname(os.path.abspath(CONFIG_FILE)), exist_ok=True)
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(to_save, f, ensure_ascii=False, indent=4)
+
+def _is_encrypted(val):
+    """判断字符串是否已经是 Fernet 密文（以 gAAAA 开头）"""
+    return isinstance(val, str) and val.startswith("gAAAA")
 
 def sync_state_to_config(key_name):
     """当 Streamlit 组件值改变时，自动同步到 json"""
@@ -153,7 +159,7 @@ def show_system_status_cards(url):
             st.write("网络环境")
              
             if public_ip == "出口受阻":
-                st.metric("已连接到网络:",f"{network_status.split("IP: ")[-1].strip(')') if 'IP: ' in network_status else network_status}")
+                st.metric("已连接到网络:", f"{network_status.split('IP: ')[-1].strip(')') if 'IP: ' in network_status else network_status}")
             else:
                 st.metric("已连接到网络:", public_ip)
 
@@ -377,6 +383,8 @@ def init_session_state(config):
         st.session_state.fetched_dates = []
     if "selected_target_date" not in st.session_state:
         st.session_state.selected_target_date = "自动获取最新"
+    if "task_select_key_version" not in st.session_state:
+        st.session_state.task_select_key_version = 0
     if "ai_summary_cache" not in st.session_state:
         st.session_state.ai_summary_cache = ""
     default_settings = {
@@ -441,15 +449,42 @@ def main():
     div[data-testid="stButton"] button[kind="primary"]:hover {
         background-color: #000000 !important;
     }
-    .stTextInput input, .stSelectbox div[data-baseweb="select"] {
+    .stTextInput input {
         border: none !important;
         border-bottom: 1px solid #EAEAEA !important;
         border-radius: 0px !important;
         background-color: transparent !important;
         box-shadow: none !important;
     }
-    .stTextInput input:focus, .stSelectbox div[data-baseweb="select"]:focus-within {
+    .stTextInput input:focus {
         border-bottom: 1px solid #111111 !important;
+    }
+    /* selectbox 触发器样式 — 只改边框和圆角，不改背景色 */
+    .stSelectbox div[data-baseweb="select"] {
+        border: none !important;
+        border-bottom: 1px solid #EAEAEA !important;
+        border-radius: 0px !important;
+        box-shadow: none !important;
+    }
+    .stSelectbox div[data-baseweb="select"]:focus-within {
+        border-bottom: 1px solid #111111 !important;
+    }
+    /* 确保下拉菜单背景不透明 */
+    div[data-baseweb="popover"] ul[data-baseweb="menu"],
+    div[data-baseweb="popover"] li[data-baseweb="menu-item"] {
+        background-color: #FFFFFF !important;
+    }
+    /* 课程较多时，BaseWeb 会把菜单滚到当前选中项，导致前几项像是“消失”。
+       这里显式放大菜单高度，并保留滚动条，避免新增项把第一项顶出可视区。 */
+    div[data-baseweb="popover"] {
+        z-index: 999999 !important;
+    }
+    div[data-baseweb="popover"] ul[data-baseweb="menu"] {
+        max-height: min(70vh, 520px) !important;
+        overflow-y: auto !important;
+    }
+    div[data-baseweb="popover"] li[data-baseweb="menu-item"] {
+        min-height: 40px !important;
     }
     
     div[data-testid="stVerticalBlock"] > div[style*="border: 1px solid"] {
@@ -623,42 +658,47 @@ def main():
         st.write("")  
 
         history_dict = config.get("history_urls", {"默认门户": "https://cvs.seu.edu.cn"})
-        display_options = ["+ 新增地址..."] + list(history_dict.keys())
-        
+        display_options = list(history_dict.keys())
+        if not display_options:
+            display_options = ["默认门户"]
+            history_dict = {"默认门户": "https://cvs.seu.edu.cn"}
+
         last_label = config.get("last_selected_label", "默认门户")
         default_index = display_options.index(last_label) if last_label in display_options else 0
-        
+        select_key = f"task_pills_label_{st.session_state.task_select_key_version}"
+
         col_name, col_url, col_btn = st.columns([0.3, 0.5, 0.2], vertical_alignment="bottom")
-        
+
         with col_name:
             def save_label_choice():
-                save_config({"last_selected_label": st.session_state["select_task_label"]})
-                 
+                selected_value = st.session_state.get(select_key)
+                if selected_value:
+                    save_config({"last_selected_label": selected_value})
                 st.session_state.fetched_dates = []
                 st.session_state.selected_target_date = "自动获取最新"
-                
-            selected_label = st.selectbox(
-                "选择任务/课程", 
+
+            selected_label = st.pills(
+                "选择任务/课程",
                 options=display_options,
-                index=default_index,
-                key="select_task_label",
-                on_change=save_label_choice
+                selection_mode="single",
+                default=display_options[default_index],
+                key=select_key,
+                on_change=save_label_choice,
+                width="stretch"
             )
+            if selected_label is None:
+                selected_label = display_options[default_index]
 
         with col_url:
-            if selected_label == "+ 新增地址...":
-                initial_url = ""
-            else:
-                initial_url = history_dict.get(selected_label, "")
-            
+            initial_url = history_dict.get(selected_label, "")
             target_url = st.text_input(
-                "目标网址", 
-                value=initial_url, 
-                key=f"url_input_{selected_label}" 
+                "目标网址",
+                value=initial_url,
+                key=f"url_input_{selected_label}"
             )
 
         with col_btn:
-            
+
             if not st.session_state.is_running:
                 if st.button("▶ 运行", use_container_width=True, type="primary"):
                     st.session_state.stop_event.clear()
@@ -670,16 +710,16 @@ def main():
                     if "asr_worker" in st.session_state:
                         st.session_state.asr_worker.abort()
                     with st.spinner("正在安全关闭浏览器及清理底层进程..."):
-                        time.sleep(1) 
-                        kill_orphaned_browsers() 
+                        time.sleep(1)
+                        kill_orphaned_browsers()
                     st.session_state.is_running = False
                     st.rerun()
-                            
+
             run_btn = st.session_state.is_running
 
-         
+
         date_col1, date_col2 = st.columns([0.5, 0.5], vertical_alignment="bottom")
-        
+
         with date_col1:
             # 「全部日期」仅在仅开启字幕抓取时可用
             subtitle_only = need_subtitle and not need_ppt and not keep_media
@@ -687,7 +727,7 @@ def main():
             if subtitle_only:
                 date_options.append("全部日期")
             date_options += st.session_state.fetched_dates
-            
+
             # 安全获取选中索引，兜底到 0
             safe_target = st.session_state.get("selected_target_date", "自动获取最新")
             if not subtitle_only and safe_target == "全部日期":
@@ -697,38 +737,57 @@ def main():
                 current_index = date_options.index(safe_target)
             except ValueError:
                 current_index = 0
-                
+
             selected_date = st.selectbox(
-                "指定抓取批次 (日期)", 
-                options=date_options, 
+                "指定抓取批次 (日期)",
+                options=date_options,
                 index=current_index,
                 key="date_selector",
                 help="「全部日期」仅字幕抓取模式下有效，将遍历所有课程日获取字幕。"
             )
             st.session_state.selected_target_date = selected_date
-            
+
         with date_col2:
             trigger_refresh = st.button("刷新日期列表", use_container_width=True)
-        
-        
-         
-        is_adding_new = (selected_label == "+ 新增地址...")
 
-        with st.expander("书签管理 (增加/删除网址)",expanded=is_adding_new):
-            new_alias = st.text_input("为当前网址起个名 (如: 高数A)", placeholder="输入名称")
-            if is_adding_new:
-                st.markdown("请在上方输入网址，在此处起个名字，然后点击下方保存。")
-            c1, c2 = st.columns(2)
-            if c1.button("保存到收藏夹", use_container_width=True):
-                if new_alias and target_url:
-                    history_dict[new_alias] = target_url
-                    save_config({"history_urls": history_dict, "last_selected_label": new_alias})
-                    st.success(f"已保存: {new_alias}")
-                    st.rerun()
-            if c2.button("删除当前选择", use_container_width=True):
+
+        # 书签管理：独立的新增/删除控件，不依赖 selectbox 中的哨兵选项
+        with st.expander("书签管理 (增加/删除网址)"):
+            add_c1, add_c2, add_c3 = st.columns([0.3, 0.5, 0.2], vertical_alignment="bottom")
+            with add_c1:
+                new_alias = st.text_input("新地址名称 (如: 高数A)", placeholder="输入名称", key="new_alias_input")
+            with add_c2:
+                new_url = st.text_input("新地址网址", placeholder="https://...", key="new_url_input")
+            with add_c3:
+                if st.button("添加到收藏夹", use_container_width=True, type="primary", key="btn_add_bookmark"):
+                    if new_alias and new_url:
+                        history_dict[new_alias] = new_url
+                        save_config({
+                            "history_urls": history_dict,
+                            "last_selected_label": new_alias
+                        })
+                        st.session_state.fetched_dates = []
+                        st.session_state.selected_target_date = "自动获取最新"
+                        st.session_state.task_select_key_version += 1
+                        st.success(f"已保存: {new_alias}")
+                        st.rerun()
+                    else:
+                        st.warning("请填写名称和网址。")
+
+            st.divider()
+            if st.button("删除当前选择的地址", use_container_width=True, key="btn_delete_bookmark"):
                 if selected_label in history_dict:
                     del history_dict[selected_label]
-                    save_config({"history_urls": history_dict})
+                    remaining = list(history_dict.keys())
+                    if remaining:
+                        new_label = remaining[0]
+                        save_config({"history_urls": history_dict, "last_selected_label": new_label})
+                    else:
+                        default_entry = {"默认门户": "https://cvs.seu.edu.cn"}
+                        save_config({"history_urls": default_entry, "last_selected_label": "默认门户"})
+                    st.session_state.fetched_dates = []
+                    st.session_state.selected_target_date = "自动获取最新"
+                    st.session_state.task_select_key_version += 1
                     st.rerun()
         
 
